@@ -84,9 +84,18 @@ async function getInfo(url) {
   const item = JSON.parse(raw);
   const entries = Array.isArray(item.entries) ? item.entries : [];
   const formats = entries.flatMap(entry => Array.isArray(entry.formats) ? entry.formats : []);
-  const dimensions = formats
+  const bestFormat = formats
     .filter(format => Number.isFinite(format.width) && Number.isFinite(format.height))
     .sort((a, b) => (b.width * b.height) - (a.width * a.height))[0];
+  // Offer the source CDN URL so mobile browsers can try downloading directly,
+  // bypassing Render for the large video transfer. Keep server download as fallback.
+  let directMediaUrl = null;
+  if (typeof bestFormat?.url === "string") {
+    try {
+      const candidate = new URL(bestFormat.url);
+      if (candidate.protocol === "https:") directMediaUrl = candidate.toString();
+    } catch {}
+  }
   return {
     title: item.title || "Instagram media",
     thumbnail: item.thumbnail || null,
@@ -95,7 +104,8 @@ async function getInfo(url) {
     webpage_url: url,
     type: item.type || "video",
     availableFormats: formats.length,
-    bestResolution: dimensions ? { width: dimensions.width, height: dimensions.height } : null,
+    bestResolution: bestFormat ? { width: bestFormat.width, height: bestFormat.height } : null,
+    directMediaUrl,
     filesizeBytes: null
   };
 }
