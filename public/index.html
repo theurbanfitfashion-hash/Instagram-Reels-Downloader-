@@ -43,6 +43,7 @@
         <p class="hint">Paste one link per line, or separate links with spaces or commas. Up to 10 unique links at a time. We check each link, then you can download individual videos or all available videos as one ZIP with live progress.</p>
         <div class="actions"><button type="button" class="primary" id="checkBatch">Check links</button><button type="button" class="secondary" id="downloadAll" disabled>Prepare bulk ZIP ↓</button></div>
         <div id="batchMessage" class="message" role="status" aria-live="polite"></div>
+        <section id="bulkProgress" class="progress-wrap" aria-live="polite"><div class="progress-head"><span id="progressLabel">Preparing downloads…</span><strong id="progressPercent">0%</strong></div><div class="progress-track"><div id="progressFill" class="progress-fill"></div></div></section>
         <section id="batchList" class="batchlist" aria-live="polite"><div class="batchtop"><h2>Bulk results</h2><span id="batchCount" class="hint"></span></div><div id="batchRows"></div></section>
       </section>
       <section class="steps" aria-label="How it works">
