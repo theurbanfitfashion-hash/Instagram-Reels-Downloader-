@@ -40,7 +40,7 @@ function safeName(value, fallback = "instagram-media") {
 
 function runParthDl(args, timeoutMs = 120_000) {
   return new Promise((resolve, reject) => {
-    const child = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("parth-dl", args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -96,12 +96,18 @@ async function getInfo(url) {
 }
 
 async function downloadToDirectory(url, dir, baseName) {
-  await runParthDl([url, "--paths", dir, "--quiet", "--no-banner"], 180_000);
-  const files = (await fs.promises.readdir(dir))
+  const targetDir = path.join(dir, safeName(baseName, "media"));
+  await fs.promises.mkdir(targetDir, { recursive: true });
+  await runParthDl([url, "--paths", targetDir, "--quiet", "--no-banner"], 180_000);
+  const files = (await fs.promises.readdir(targetDir))
     .filter(name => !name.endsWith(".part") && !name.endsWith(".part.json") && !name.endsWith(".json"));
   if (!files.length) throw new Error("The media download did not produce a file.");
   files.sort((a, b) => (a.endsWith(".mp4") ? -1 : 0) - (b.endsWith(".mp4") ? -1 : 0));
-  return path.join(dir, files[0]);
+  const source = path.join(targetDir, files[0]);
+  const ext = path.extname(source).toLowerCase() || ".mp4";
+  const output = path.join(dir, safeName(baseName, "media") + ext);
+  await fs.promises.rename(source, output);
+  return output;
 }
 
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "instagram-reels-downloader" }));
