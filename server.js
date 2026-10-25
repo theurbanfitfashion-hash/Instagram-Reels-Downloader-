@@ -83,6 +83,10 @@ async function getInfo(url) {
   const raw = await runParthDl(["--json", "--no-banner", url]);
   const item = JSON.parse(raw);
   const entries = Array.isArray(item.entries) ? item.entries : [];
+  const formats = entries.flatMap(entry => Array.isArray(entry.formats) ? entry.formats : []);
+  const dimensions = formats
+    .filter(format => Number.isFinite(format.width) && Number.isFinite(format.height))
+    .sort((a, b) => (b.width * b.height) - (a.width * a.height))[0];
   return {
     title: item.title || "Instagram media",
     thumbnail: item.thumbnail || null,
@@ -90,7 +94,8 @@ async function getInfo(url) {
     uploader: item.uploader || null,
     webpage_url: url,
     type: item.type || "video",
-    availableFormats: entries.reduce((n, entry) => n + (Array.isArray(entry.formats) ? entry.formats.length : 0), 0),
+    availableFormats: formats.length,
+    bestResolution: dimensions ? { width: dimensions.width, height: dimensions.height } : null,
     filesizeBytes: null
   };
 }
@@ -98,7 +103,8 @@ async function getInfo(url) {
 async function downloadToDirectory(url, dir, baseName) {
   const targetDir = path.join(dir, safeName(baseName, "media"));
   await fs.promises.mkdir(targetDir, { recursive: true });
-  await runParthDl([url, "--paths", targetDir, "--quiet", "--no-banner"], 180_000);
+  // Explicitly request the best rendition exposed by Instagram to this public, logged-out client.
+  await runParthDl([url, "--quality", "best", "--paths", targetDir, "--quiet", "--no-banner"], 180_000);
   const files = (await fs.promises.readdir(targetDir))
     .filter(name => !name.endsWith(".part") && !name.endsWith(".part.json") && !name.endsWith(".json"));
   if (!files.length) throw new Error("The media download did not produce a file.");
@@ -125,14 +131,15 @@ app.get("/api/download", async (req, res) => {
   let url;
   try { url = normalizeInstagramUrl(req.query.url); }
   catch (err) { return res.status(400).json({ error: err.message }); }
+  const requestedName = safeName(req.query.title || "instagram-video", "instagram-video");
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "reelsave-"));
   try {
-    const info = await getInfo(url);
-    const file = await downloadToDirectory(url, dir, "video");
+    // The page already looked up metadata. Avoid a second Instagram extraction before downloading.
+    const file = await downloadToDirectory(url, dir, requestedName);
     const ext = path.extname(file).toLowerCase();
     const mime = ext === ".webm" ? "video/webm" : ext === ".mkv" ? "video/x-matroska" : "video/mp4";
     res.setHeader("Content-Type", mime);
-    res.setHeader("Content-Disposition", 'attachment; filename="' + safeName(info.title) + ext + '"');
+    res.setHeader("Content-Disposition", 'attachment; filename="' + requestedName + ext + '"');
     res.setHeader("Cache-Control", "no-store");
     res.on("close", () => fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {}));
     await pipeline(fs.createReadStream(file), res);
