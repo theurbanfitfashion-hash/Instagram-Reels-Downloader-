@@ -60,6 +60,22 @@
     const singleTab=$('singleTab'),batchTab=$('batchTab'),singlePanel=$('singlePanel'),batchPanel=$('batchPanel');
     function setMode(mode){const single=mode==='single';singlePanel.hidden=!single;batchPanel.hidden=single;singleTab.classList.toggle('active',single);batchTab.classList.toggle('active',!single);singleTab.setAttribute('aria-selected',String(single));batchTab.setAttribute('aria-selected',String(!single));}
     singleTab.addEventListener('click',()=>setMode('single'));batchTab.addEventListener('click',()=>setMode('batch'));
+    // Prevent rapid repeated taps from starting several identical server-side downloads.
+    let downloadClickLocked=false;
+    $('download').addEventListener('click',e=>{
+      if(downloadClickLocked){e.preventDefault();return;}
+      downloadClickLocked=true;
+      const button=$('download');
+      button.textContent='Download started…';
+      button.style.opacity='.7';
+      button.style.pointerEvents='none';
+      window.setTimeout(()=>{
+        downloadClickLocked=false;
+        button.textContent='Download video ↓';
+        button.style.opacity='';
+        button.style.pointerEvents='';
+      },45000);
+    });
     $('form').addEventListener('submit',async e=>{e.preventDefault();$('result').classList.remove('show');$('thumb').hidden=true;$('singleMessage').className='message';$('singleMessage').textContent='Checking public media…';$('submit').disabled=true;$('submit').textContent='Checking…';try{const response=await fetch('/api/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('url').value.trim()})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not retrieve this media.');$('title').textContent=data.title||'Instagram media';$('details').textContent=[data.uploader,data.duration?Math.round(data.duration)+' seconds':null,data.bestResolution?data.bestResolution.width+' × '+data.bestResolution.height+' · best available quality':null].filter(Boolean).join(' · ')||'Best available quality will be selected';if(data.thumbnail){$('thumb').src=data.thumbnail;$('thumb').hidden=false;}$('download').href='/api/download?url='+encodeURIComponent(data.webpage_url)+'&title='+encodeURIComponent(data.title||'instagram-video');$('download').textContent='Download video ↓';$('result').classList.add('show');$('singleMessage').textContent='Media found. The downloader selects the best quality Instagram makes available to this public request; this may be lower than the original upload.';}catch(err){$('singleMessage').className='message error';$('singleMessage').textContent=err.message||'Something went wrong. Please try again.';}finally{$('submit').disabled=false;$('submit').textContent='Find media →';}});
     function parseUrls(text){return [...new Set((text.match(/https?:\/\/[^\s,]+/g)||[]).map(s=>s.replace(/[)\]}>'"]+$/g,'')))];}
     let batchItems=[];
