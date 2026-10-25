@@ -84,7 +84,8 @@ async function getInfo(url) {
     uploader: item.uploader || item.channel || null,
     webpage_url: url,
     // yt-dlp's selected best format is used for downloading; this reports availability, not a guaranteed source-original flag.
-    availableFormats: Array.isArray(item.formats) ? item.formats.length : null
+    availableFormats: Array.isArray(item.formats) ? item.formats.length : null,
+    filesizeBytes: item.filesize || item.filesize_approx || (Array.isArray(item.formats) ? Math.max(0, ...item.formats.map(f => f.filesize || f.filesize_approx || 0)) : 0) || null
   };
 }
 
@@ -137,40 +138,73 @@ app.get("/api/download", async (req, res) => {
   }
 });
 
+const batchJobs = new Map();
+const JOB_TTL_MS = 30 * 60 * 1000;
+function cleanOldJobs() {
+  const now = Date.now();
+  for (const [id, job] of batchJobs) if (now - job.createdAt > JOB_TTL_MS) {
+    batchJobs.delete(id); fs.promises.rm(job.dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+setInterval(cleanOldJobs, 5 * 60 * 1000).unref();
+
 app.post("/api/batch-download", async (req, res) => {
   let urls;
   try {
-    if (!Array.isArray(req.body?.urls) || req.body.urls.length === 0) throw new Error("Paste one or more Instagram links first.");
-    if (req.body.urls.length > 10) throw new Error("Batch mode supports up to 10 links per ZIP. Split larger lists into smaller batches.");
+    if (!Array.isArray(req.body?.urls) || !req.body.urls.length) throw new Error("Paste one or more Instagram links first.");
+    if (req.body.urls.length > 10) throw new Error("Bulk mode supports up to 10 links at a time.");
     urls = [...new Set(req.body.urls.map(normalizeInstagramUrl))];
     if (!urls.length) throw new Error("No valid Instagram links were provided.");
-  } catch (err) {
-    return res.status(400).json({ error: err.message || "Please check your links." });
-  }
-
-  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "reelsave-batch-"));
-  try {
+  } catch (err) { return res.status(400).json({ error: err.message || "Please check your links." }); }
+  const id = require("crypto").randomUUID();
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "reelsave-bulk-"));
+  const job = { id, dir, createdAt: Date.now(), status: "processing", total: urls.length, completed: 0, currentTitle: "", items: [], zipPath: null, error: null };
+  batchJobs.set(id, job);
+  res.status(202).json({ jobId: id });
+  (async () => {
     const files = [];
     for (let i = 0; i < urls.length; i++) {
-      const info = await getInfo(urls[i]);
-      const file = await downloadToDirectory(urls[i], dir, String(i + 1).padStart(2, "0") + "-" + safeName(info.title, "reel"));
-      files.push({ file, name: path.basename(file) });
+      const item = { index: i + 1, url: urls[i], title: "Link " + (i + 1), status: "queued", sizeBytes: null, error: null };
+      job.items.push(item); job.currentTitle = item.title;
+      try {
+        item.status = "downloading";
+        const info = await getInfo(urls[i]); item.title = info.title || item.title; item.sizeBytes = info.filesizeBytes || null; job.currentTitle = item.title;
+        const file = await downloadToDirectory(urls[i], dir, String(i + 1).padStart(2, "0") + "-" + safeName(item.title, "reel"));
+        item.sizeBytes = (await fs.promises.stat(file)).size; item.status = "ready"; files.push({ file, name: path.basename(file) });
+      } catch (err) { item.status = "failed"; item.error = err.message || "This link could not be downloaded."; }
+      job.completed++;
     }
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", 'attachment; filename="instagram-reels.zip"');
-    res.setHeader("Cache-Control", "no-store");
-    const archive = archiver("zip", { zlib: { level: 5 } });
-    archive.on("warning", err => { if (err.code !== "ENOENT") res.destroy(err); });
-    archive.on("error", err => res.destroy(err));
-    res.on("close", () => fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {}));
-    archive.pipe(res);
-    for (const file of files) archive.file(file.file, { name: file.name });
-    await archive.finalize();
-  } catch (err) {
-    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
-    if (!res.headersSent) res.status(400).json({ error: err.message || "Batch download failed. One or more links may be unavailable." });
-    else res.destroy(err);
-  }
+    if (!files.length) { job.status = "failed"; job.error = "None of these links could be downloaded. Check that the posts are publicly accessible."; return; }
+    try {
+      job.zipPath = path.join(dir, "instagram-reels.zip");
+      await new Promise((resolve, reject) => {
+        const output = fs.createWriteStream(job.zipPath);
+        const archive = archiver("zip", { zlib: { level: 1 } });
+        output.on("close", resolve); output.on("error", reject); archive.on("error", reject);
+        archive.pipe(output); for (const file of files) archive.file(file.file, { name: file.name });
+        archive.finalize().catch(reject);
+      });
+      job.zipSizeBytes = (await fs.promises.stat(job.zipPath)).size; job.status = "ready";
+    } catch { job.status = "failed"; job.error = "Videos downloaded, but the ZIP could not be prepared. Please download items individually."; }
+  })().catch(err => { job.status = "failed"; job.error = err.message || "Bulk download failed."; });
+});
+
+app.get("/api/batch-status/:id", (req, res) => {
+  const job = batchJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "This bulk download expired. Please start it again." });
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ jobId: job.id, status: job.status, total: job.total, completed: job.completed, currentTitle: job.currentTitle,
+    items: job.items.map(({ index, title, status, sizeBytes, error }) => ({ index, title, status, sizeBytes, error })),
+    zipSizeBytes: job.zipSizeBytes || null, error: job.error });
+});
+
+app.get("/api/batch-download/:id", async (req, res) => {
+  const job = batchJobs.get(req.params.id);
+  if (!job || job.status !== "ready" || !job.zipPath) return res.status(409).json({ error: "ZIP is not ready yet. Wait for progress to finish." });
+  res.setHeader("Content-Type", "application/zip"); res.setHeader("Content-Disposition", 'attachment; filename="instagram-reels.zip"');
+  res.setHeader("Content-Length", String(job.zipSizeBytes)); res.setHeader("Cache-Control", "no-store");
+  await pipeline(fs.createReadStream(job.zipPath), res);
+  setTimeout(() => { const current = batchJobs.get(job.id); if (current) { batchJobs.delete(job.id); fs.promises.rm(job.dir, { recursive: true, force: true }).catch(() => {}); } }, 5 * 60 * 1000).unref();
 });
 
 app.get("*", (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
