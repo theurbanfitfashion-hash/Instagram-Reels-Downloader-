@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101014">
+  <meta name="description" content="A simple tool for downloading publicly accessible Instagram Reels and posts you have permission to save.">
+  <title>ReelSave — Instagram Downloader</title>
+  <style>
+    :root{color-scheme:dark;--bg:#101014;--panel:#19191f;--line:#30303a;--muted:#a5a5b4;--text:#f8f8fb;--pink:#ff4f87;--violet:#8b5cf6}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 50% -10%,#30204b 0,transparent 42%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;min-height:100vh}
+    .wrap{width:min(900px,100% - 32px);margin:auto}.nav{display:flex;align-items:center;justify-content:space-between;padding:24px 0}.brand{font-size:21px;font-weight:850;letter-spacing:-.7px}.brand span{color:var(--pink)}.badge{font-size:12px;color:#d5c8ff;border:1px solid #5b447b;padding:7px 10px;border-radius:99px}
+    main{padding:65px 0 48px;text-align:center}.eyebrow{display:inline-flex;gap:8px;align-items:center;color:#ffb5ce;background:#51243a55;border:1px solid #77354e;padding:8px 12px;border-radius:99px;font-size:12px;font-weight:700}.dot{width:7px;height:7px;border-radius:50%;background:#ff5a91}
+    h1{font-size:clamp(36px,7vw,62px);line-height:1.04;letter-spacing:-2.5px;margin:22px auto 16px;max-width:740px}h1 span{background:linear-gradient(90deg,#ff6798,#b79aff);background-clip:text;-webkit-background-clip:text;color:transparent}.sub{color:var(--muted);line-height:1.7;font-size:16px;max-width:610px;margin:0 auto 32px}
+    .form{display:flex;gap:10px;background:#19191f;border:1px solid #383843;padding:8px;border-radius:18px;max-width:730px;margin:auto;box-shadow:0 22px 80px #0005}.linkicon{align-self:center;padding-left:10px;color:#aaa5b9;font-size:22px}.form input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:white;padding:13px 5px;font-size:15px}.form input::placeholder{color:#777783}.form button{border:0;border-radius:12px;padding:0 22px;min-height:48px;background:linear-gradient(120deg,var(--pink),var(--violet));color:white;font-weight:800;font-size:14px;cursor:pointer}.form button:disabled{opacity:.55;cursor:wait}
+    .message{min-height:28px;margin:16px auto 0;color:#c5c2d0;font-size:14px}.message.error{color:#ff9bad}.result{display:none;text-align:left;max-width:730px;margin:22px auto 0;padding:16px;border:1px solid var(--line);border-radius:18px;background:#19191f;gap:16px;align-items:center}.result.show{display:flex}.thumb{width:112px;height:112px;object-fit:cover;border-radius:12px;background:#282832;flex-shrink:0}.meta{min-width:0;flex:1}.meta h2{font-size:17px;margin:0 0 8px;overflow-wrap:anywhere}.meta p{font-size:13px;color:var(--muted);margin:0}.download{display:inline-block;margin-top:14px;text-decoration:none;background:#f8f7ff;color:#17131f;font-weight:800;font-size:13px;padding:12px 16px;border-radius:10px}
+    .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:70px 0 36px;text-align:left}.step{border:1px solid var(--line);border-radius:16px;background:#17171c;padding:20px}.num{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#382544;color:#f7c4e0;font-weight:800}.step h3{font-size:15px;margin:16px 0 7px}.step p{color:var(--muted);font-size:13px;line-height:1.6;margin:0}
+    .notice{color:#9695a3;text-align:center;font-size:12px;line-height:1.7;max-width:740px;margin:28px auto 0}footer{border-top:1px solid #26262e;color:#797986;font-size:12px;padding:22px 0 30px;text-align:center}
+    @media(max-width:600px){.nav{padding:18px 0}.badge{font-size:10px}main{padding:40px 0 30px}h1{letter-spacing:-1.6px}.sub{font-size:14px}.form{gap:4px;padding:6px;border-radius:14px}.form input{font-size:13px}.form button{padding:0 13px;font-size:12px;min-height:44px}.linkicon{font-size:18px;padding-left:5px}.steps{grid-template-columns:1fr;margin-top:44px}.step{display:grid;grid-template-columns:38px 1fr;column-gap:12px}.step .num{grid-row:span 2}.step h3{margin:0 0 5px}.result.show{align-items:flex-start;flex-wrap:wrap}.thumb{width:84px;height:84px}.meta{width:calc(100% - 105px)}.download{margin-left:100px;margin-top:0}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="nav"><div class="brand">Reel<span>Save</span></div><div class="badge">PUBLIC MEDIA ONLY</div></header>
+    <main>
+      <div class="eyebrow"><span class="dot"></span> SIMPLE · FAST · MOBILE FRIENDLY</div>
+      <h1>Save the Reels<br><span>you love.</span></h1>
+      <p class="sub">Paste a link to a publicly accessible Instagram Reel or post. Preview the media, then download when it's available.</p>
+      <form class="form" id="form"><div class="linkicon" aria-hidden="true">↗</div><input id="url" type="url" inputmode="url" autocomplete="url" placeholder="Paste Instagram Reel link here…" aria-label="Instagram URL" required><button id="submit" type="submit">Find media →</button></form>
+      <div id="message" class="message" role="status" aria-live="polite"></div>
+      <section id="result" class="result" aria-live="polite"><img id="thumb" class="thumb" alt="Media preview" hidden><div class="meta"><h2 id="title"></h2><p id="details"></p></div><a id="download" class="download" href="#">Download video ↓</a></section>
+      <section class="steps" aria-label="How it works">
+        <article class="step"><div class="num">1</div><h3>Copy the link</h3><p>Open a public Reel or post in Instagram and copy its link.</p></article>
+        <article class="step"><div class="num">2</div><h3>Paste it here</h3><p>We check whether the public media can be retrieved.</p></article>
+        <article class="step"><div class="num">3</div><h3>Download</h3><p>If available, use the download button to save the video.</p></article>
+      </section>
+      <p class="notice">Only use this tool for content you own or have permission to save. Private posts, login-protected content, and media blocked by Instagram may not work. This independent tool is not affiliated with Instagram.</p>
+    </main>
+  </div>
+  <footer>ReelSave · A simple public-media utility</footer>
+  <script>
+    const form=document.getElementById('form'), input=document.getElementById('url'), button=document.getElementById('submit'), message=document.getElementById('message'), result=document.getElementById('result'), thumb=document.getElementById('thumb'), title=document.getElementById('title'), details=document.getElementById('details'), download=document.getElementById('download');
+    form.addEventListener('submit',async e=>{e.preventDefault();result.classList.remove('show');thumb.hidden=true;message.className='message';message.textContent='Checking public media…';button.disabled=true;button.textContent='Checking…';try{const response=await fetch('/api/info',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:input.value.trim()})});const data=await response.json();if(!response.ok)throw new Error(data.error||'Could not retrieve this media.');title.textContent=data.title||'Instagram media';details.textContent=[data.uploader,data.duration?Math.round(data.duration)+' seconds':null].filter(Boolean).join(' · ')||'Public media found';if(data.thumbnail){thumb.src=data.thumbnail;thumb.hidden=false;}download.href='/api/download?url='+encodeURIComponent(data.webpage_url);result.classList.add('show');message.textContent='Media found. Use the button below to download.';}catch(err){message.className='message error';message.textContent=err.message||'Something went wrong. Please try again.';}finally{button.disabled=false;button.textContent='Find media →';}});
+  </script>
+</body>
+</html>
