@@ -79,98 +79,31 @@ function runYtDlp(args, timeoutMs = 120_000) {
   });
 }
 
-function shortcodeFromUrl(url) {
-  const match = new URL(url).pathname.match(/^\/(?:reel|reels|p|tv)\/([A-Za-z0-9_-]+)/);
-  if (!match) throw new Error("Could not read the Instagram post ID.");
-  return match[1];
-}
-
-function runInstaloaderPython(args, timeoutMs = 120_000) {
-  return new Promise((resolve, reject) => {
-    const child = spawn("python3", ["-c", args.script, ...args.argv], { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "", stderr = "", settled = false;
-    const timer = setTimeout(() => { child.kill("SIGKILL"); finish(new Error("Instaloader took too long to respond.")); }, timeoutMs);
-    function finish(err, value) { if (settled) return; settled = true; clearTimeout(timer); err ? reject(err) : resolve(value); }
-    child.stdout.on("data", chunk => { stdout = (stdout + chunk.toString()).slice(-100000); });
-    child.stderr.on("data", chunk => { stderr = (stderr + chunk.toString()).slice(-6000); });
-    child.on("error", () => finish(new Error("Instaloader is not available on this server.")));
-    child.on("close", code => code === 0 ? finish(null, stdout.trim()) : finish(new Error(stderr || "Instaloader could not access this post.")));
-  });
-}
-
-async function getInfoWithInstaloader(url) {
-  const shortcode = shortcodeFromUrl(url);
-  const script = [
-    "import json, sys, instaloader",
-    "L = instaloader.Instaloader(quiet=True, download_pictures=False, download_videos=False, download_video_thumbnails=False, save_metadata=False)",
-    "p = instaloader.Post.from_shortcode(L.context, sys.argv[1])",
-    "print(json.dumps({'title': ((p.caption or '').splitlines() or ['Instagram media'])[0][:120], 'thumbnail': getattr(p, 'url', None), 'duration': getattr(p, 'video_duration', None) if getattr(p, 'is_video', False) else None, 'uploader': getattr(p, 'owner_username', None), 'is_video': bool(getattr(p, 'is_video', False))}))"
-  ].join("\n");
-  const data = JSON.parse(await runInstaloaderPython({ script, argv: [shortcode] }));
-  if (!data.is_video && /reel|tv/i.test(new URL(url).pathname)) throw new Error("Instaloader did not identify this link as a video.");
-  return { title: data.title || "Instagram media", thumbnail: data.thumbnail || null, duration: Number.isFinite(data.duration) ? data.duration : null, uploader: data.uploader || null, webpage_url: url, availableFormats: null, filesizeBytes: null, extractor: "instaloader" };
-}
-
-async function downloadWithInstaloader(url, dir, baseName) {
-  const shortcode = shortcodeFromUrl(url);
-  const script = [
-    "import sys, instaloader",
-    "outdir, shortcode, filename = sys.argv[1], sys.argv[2], sys.argv[3]",
-    "L = instaloader.Instaloader(dirname_pattern=outdir, filename_pattern=filename, quiet=True, download_pictures=False, download_videos=True, download_video_thumbnails=False, save_metadata=False, post_metadata_txt_pattern='')",
-    "p = instaloader.Post.from_shortcode(L.context, shortcode)",
-    "if not p.is_video: raise RuntimeError('This Instagram post does not contain a downloadable video.')",
-    "L.download_post(p, target='reel')"
-  ].join("\n");
-  await runInstaloaderPython({ script, argv: [dir, shortcode, baseName] }, 180_000);
-  const names = await fs.promises.readdir(dir);
-  const video = names.filter(name => /\.(mp4|mov|webm|mkv)$/i.test(name) && !name.endsWith(".part"));
-  if (!video.length) throw new Error("Instaloader did not produce a video file.");
-  video.sort((a, b) => (a.endsWith(".mp4") ? -1 : 0) - (b.endsWith(".mp4") ? -1 : 0));
-  const selected = path.join(dir, video[0]);
-  const desired = path.join(dir, baseName + path.extname(selected));
-  if (selected !== desired) await fs.promises.rename(selected, desired);
-  return desired;
-}
-
 async function getInfo(url) {
-  try {
-    const raw = await runYtDlp(["--dump-single-json", "--no-warnings", "--no-playlist", "--skip-download", "--extractor-retries", "2", "--socket-timeout", "20", url]);
-    const item = JSON.parse(raw);
-    return {
-      title: item.title || "Instagram media",
-      thumbnail: item.thumbnail || null,
-      duration: Number.isFinite(item.duration) ? item.duration : null,
-      uploader: item.uploader || item.channel || null,
-      webpage_url: url,
-      availableFormats: Array.isArray(item.formats) ? item.formats.length : null,
-      filesizeBytes: item.filesize || item.filesize_approx || (Array.isArray(item.formats) ? Math.max(0, ...item.formats.map(f => f.filesize || f.filesize_approx || 0)) : 0) || null,
-      extractor: "yt-dlp"
-    };
-  } catch (ytError) {
-    try { return await getInfoWithInstaloader(url); }
-    catch (instaError) {
-      throw new Error("Both extractors were unable to read this post. Instagram may be blocking automated access. yt-dlp: " + ytError.message + " Instaloader: " + instaError.message);
-    }
-  }
+  const raw = await runYtDlp(["--dump-single-json", "--no-warnings", "--no-playlist", "--skip-download", "--extractor-retries", "2", "--socket-timeout", "20", url]);
+  const item = JSON.parse(raw);
+  return {
+    title: item.title || "Instagram media",
+    thumbnail: item.thumbnail || null,
+    duration: Number.isFinite(item.duration) ? item.duration : null,
+    uploader: item.uploader || item.channel || null,
+    webpage_url: url,
+    // yt-dlp's selected best format is used for downloading; this reports availability, not a guaranteed source-original flag.
+    availableFormats: Array.isArray(item.formats) ? item.formats.length : null,
+    filesizeBytes: item.filesize || item.filesize_approx || (Array.isArray(item.formats) ? Math.max(0, ...item.formats.map(f => f.filesize || f.filesize_approx || 0)) : 0) || null
+  };
 }
 
 async function downloadToDirectory(url, dir, baseName) {
   const template = path.join(dir, baseName + ".%(ext)s");
-  try {
-    await runYtDlp([
-      "--no-warnings", "--no-playlist", "--no-progress",
-      "--extractor-retries", "2", "--retries", "2", "--socket-timeout", "20",
-      "-f", "bestvideo*+bestaudio/best",
-      "--merge-output-format", "mp4",
-      "-o", template,
-      url
-    ], 180_000);
-  } catch (ytError) {
-    try { return await downloadWithInstaloader(url, dir, baseName); }
-    catch (instaError) {
-      throw new Error("Download failed with both extractors. Instagram may be blocking automated access. yt-dlp: " + ytError.message + " Instaloader: " + instaError.message);
-    }
-  }
+  await runYtDlp([
+    "--no-warnings", "--no-playlist", "--no-progress",
+    "--extractor-retries", "2", "--retries", "2", "--socket-timeout", "20",
+    "-f", "bestvideo*+bestaudio/best",
+    "--merge-output-format", "mp4",
+    "-o", template,
+    url
+  ], 180_000);
   const files = (await fs.promises.readdir(dir))
     .filter(name => name.startsWith(baseName + ".") && !name.endsWith(".part") && !name.endsWith(".ytdl"));
   if (!files.length) throw new Error("The media download did not produce a video file.");
