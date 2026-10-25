@@ -38,7 +38,7 @@ function safeName(value, fallback = "instagram-media") {
     .replace(/[ .]+/g, "-").slice(0, 80) || fallback;
 }
 
-function runYtDlp(args, timeoutMs = 120_000) {
+function runParthDl(args, timeoutMs = 120_000) {
   return new Promise((resolve, reject) => {
     const child = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -80,33 +80,26 @@ function runYtDlp(args, timeoutMs = 120_000) {
 }
 
 async function getInfo(url) {
-  const raw = await runYtDlp(["--dump-single-json", "--no-warnings", "--no-playlist", "--skip-download", "--extractor-retries", "2", "--socket-timeout", "20", url]);
+  const raw = await runParthDl(["--json", "--no-banner", url]);
   const item = JSON.parse(raw);
+  const entries = Array.isArray(item.entries) ? item.entries : [];
   return {
     title: item.title || "Instagram media",
     thumbnail: item.thumbnail || null,
     duration: Number.isFinite(item.duration) ? item.duration : null,
-    uploader: item.uploader || item.channel || null,
+    uploader: item.uploader || null,
     webpage_url: url,
-    // yt-dlp's selected best format is used for downloading; this reports availability, not a guaranteed source-original flag.
-    availableFormats: Array.isArray(item.formats) ? item.formats.length : null,
-    filesizeBytes: item.filesize || item.filesize_approx || (Array.isArray(item.formats) ? Math.max(0, ...item.formats.map(f => f.filesize || f.filesize_approx || 0)) : 0) || null
+    type: item.type || "video",
+    availableFormats: entries.reduce((n, entry) => n + (Array.isArray(entry.formats) ? entry.formats.length : 0), 0),
+    filesizeBytes: null
   };
 }
 
 async function downloadToDirectory(url, dir, baseName) {
-  const template = path.join(dir, baseName + ".%(ext)s");
-  await runYtDlp([
-    "--no-warnings", "--no-playlist", "--no-progress",
-    "--extractor-retries", "2", "--retries", "2", "--socket-timeout", "20",
-    "-f", "bestvideo*+bestaudio/best",
-    "--merge-output-format", "mp4",
-    "-o", template,
-    url
-  ], 180_000);
+  await runParthDl([url, "--paths", dir, "--quiet", "--no-banner"], 180_000);
   const files = (await fs.promises.readdir(dir))
-    .filter(name => name.startsWith(baseName + ".") && !name.endsWith(".part") && !name.endsWith(".ytdl"));
-  if (!files.length) throw new Error("The media download did not produce a video file.");
+    .filter(name => !name.endsWith(".part") && !name.endsWith(".part.json") && !name.endsWith(".json"));
+  if (!files.length) throw new Error("The media download did not produce a file.");
   files.sort((a, b) => (a.endsWith(".mp4") ? -1 : 0) - (b.endsWith(".mp4") ? -1 : 0));
   return path.join(dir, files[0]);
 }
