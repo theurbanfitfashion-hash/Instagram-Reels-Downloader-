@@ -113,7 +113,7 @@ app.get("/api/download", async (req, res) => {
         else res.destroy(new Error("Media stream failed"));
       }
     });
-    req.on("close", () => { if (!res.writableEnded) child.kill("SIGTERM"); });
+    res.on("close", () => { if (!res.writableEnded) child.kill("SIGTERM"); });
   } catch (err) {
     res.status(400).json({ error: err.message || "Unable to download this media." });
   }
