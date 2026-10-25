@@ -12,6 +12,8 @@ const PORT = Number(process.env.PORT || 10000);
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 app.disable("x-powered-by");
+// Render sits behind a trusted reverse proxy; needed for correct client IP/rate-limit handling.
+app.set("trust proxy", 1);
 app.use(express.json({ limit: "20kb" }));
 app.use(express.static(PUBLIC_DIR, { extensions: ["html"] }));
 app.use("/api/", rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true, legacyHeaders: false }));
@@ -64,10 +66,13 @@ function runYtDlp(args, timeoutMs = 120_000) {
     child.on("close", code => {
       if (code !== 0) {
         const detail = stderr.toLowerCase();
-        if (detail.includes("login") || detail.includes("private") || detail.includes("authentication")) {
-          return finish(new Error("This post may be private or require Instagram login. Only accessible public media is supported."));
+        if (detail.includes("login") || detail.includes("private") || detail.includes("authentication") || detail.includes("checkpoint") || detail.includes("consent")) {
+          return finish(new Error("Instagram is blocking automated access to this post. It can happen even when the profile is public, so this does not prove the post is private. Try another public Reel or try again later."));
         }
-        return finish(new Error("Instagram couldn't provide this media. Check that the link is public and try again."));
+        if (detail.includes("429") || detail.includes("rate limit") || detail.includes("too many requests")) {
+          return finish(new Error("Instagram is temporarily rate-limiting downloads. Please wait a few minutes and try again."));
+        }
+        return finish(new Error("Instagram couldn't provide this media. The post may be public but unavailable to automated access, or the link may be invalid. Try another public Reel."));
       }
       finish(null, stdout);
     });
@@ -75,7 +80,7 @@ function runYtDlp(args, timeoutMs = 120_000) {
 }
 
 async function getInfo(url) {
-  const raw = await runYtDlp(["--dump-single-json", "--no-warnings", "--no-playlist", "--skip-download", url]);
+  const raw = await runYtDlp(["--dump-single-json", "--no-warnings", "--no-playlist", "--skip-download", "--extractor-retries", "2", "--socket-timeout", "20", url]);
   const item = JSON.parse(raw);
   return {
     title: item.title || "Instagram media",
@@ -93,6 +98,7 @@ async function downloadToDirectory(url, dir, baseName) {
   const template = path.join(dir, baseName + ".%(ext)s");
   await runYtDlp([
     "--no-warnings", "--no-playlist", "--no-progress",
+    "--extractor-retries", "2", "--retries", "2", "--socket-timeout", "20",
     "-f", "bestvideo*+bestaudio/best",
     "--merge-output-format", "mp4",
     "-o", template,
