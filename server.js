@@ -1,14 +1,18 @@
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const path = require("path");
+const fs = require("fs");
+const os = require("os");
 const { spawn } = require("child_process");
+const { pipeline } = require("stream/promises");
+const archiver = require("archiver");
 
 const app = express();
 const PORT = Number(process.env.PORT || 10000);
 const PUBLIC_DIR = path.join(__dirname, "public");
 
 app.disable("x-powered-by");
-app.use(express.json({ limit: "10kb" }));
+app.use(express.json({ limit: "20kb" }));
 app.use(express.static(PUBLIC_DIR, { extensions: ["html"] }));
 app.use("/api/", rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: true, legacyHeaders: false }));
 
@@ -26,7 +30,13 @@ function normalizeInstagramUrl(raw) {
   return parsed.toString();
 }
 
-function runYtDlp(args, timeoutMs = 90_000) {
+function safeName(value, fallback = "instagram-media") {
+  return String(value || fallback).normalize("NFKD")
+    .replace(/[^a-zA-Z0-9 _.-]/g, "").trim()
+    .replace(/[ .]+/g, "-").slice(0, 80) || fallback;
+}
+
+function runYtDlp(args, timeoutMs = 120_000) {
   return new Promise((resolve, reject) => {
     const child = spawn("yt-dlp", args, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -64,20 +74,42 @@ function runYtDlp(args, timeoutMs = 90_000) {
   });
 }
 
+async function getInfo(url) {
+  const raw = await runYtDlp(["--dump-single-json", "--no-warnings", "--no-playlist", "--skip-download", url]);
+  const item = JSON.parse(raw);
+  return {
+    title: item.title || "Instagram media",
+    thumbnail: item.thumbnail || null,
+    duration: Number.isFinite(item.duration) ? item.duration : null,
+    uploader: item.uploader || item.channel || null,
+    webpage_url: url,
+    // yt-dlp's selected best format is used for downloading; this reports availability, not a guaranteed source-original flag.
+    availableFormats: Array.isArray(item.formats) ? item.formats.length : null
+  };
+}
+
+async function downloadToDirectory(url, dir, baseName) {
+  const template = path.join(dir, baseName + ".%(ext)s");
+  await runYtDlp([
+    "--no-warnings", "--no-playlist", "--no-progress",
+    "-f", "bestvideo*+bestaudio/best",
+    "--merge-output-format", "mp4",
+    "-o", template,
+    url
+  ], 180_000);
+  const files = (await fs.promises.readdir(dir))
+    .filter(name => name.startsWith(baseName + ".") && !name.endsWith(".part") && !name.endsWith(".ytdl"));
+  if (!files.length) throw new Error("The media download did not produce a video file.");
+  files.sort((a, b) => (a.endsWith(".mp4") ? -1 : 0) - (b.endsWith(".mp4") ? -1 : 0));
+  return path.join(dir, files[0]);
+}
+
 app.get("/api/health", (_req, res) => res.json({ ok: true, service: "instagram-reels-downloader" }));
 
 app.post("/api/info", async (req, res) => {
   try {
     const url = normalizeInstagramUrl(req.body?.url);
-    const raw = await runYtDlp(["--dump-single-json", "--no-warnings", "--no-playlist", "--skip-download", url]);
-    const item = JSON.parse(raw);
-    res.json({
-      title: item.title || "Instagram media",
-      thumbnail: item.thumbnail || null,
-      duration: Number.isFinite(item.duration) ? item.duration : null,
-      uploader: item.uploader || item.channel || null,
-      webpage_url: url
-    });
+    res.json(await getInfo(url));
   } catch (err) {
     res.status(400).json({ error: err.message || "Unable to retrieve this media." });
   }
@@ -87,38 +119,59 @@ app.get("/api/download", async (req, res) => {
   let url;
   try { url = normalizeInstagramUrl(req.query.url); }
   catch (err) { return res.status(400).json({ error: err.message }); }
-
-  // Fetch metadata first so errors can be returned before streaming begins.
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "reelsave-"));
   try {
-    const raw = await runYtDlp(["--dump-single-json", "--no-warnings", "--no-playlist", "--skip-download", url], 90_000);
-    const item = JSON.parse(raw);
-    const safeTitle = String(item.title || "instagram-media")
-      .normalize("NFKD").replace(/[^a-zA-Z0-9 _.-]/g, "").trim().replace(/[ .]+/g, "-").slice(0, 80) || "instagram-media";
-    res.setHeader("Content-Type", "video/mp4");
-    res.setHeader("Content-Disposition", 'attachment; filename="' + safeTitle + '.mp4"');
+    const info = await getInfo(url);
+    const file = await downloadToDirectory(url, dir, "video");
+    const ext = path.extname(file).toLowerCase();
+    const mime = ext === ".webm" ? "video/webm" : ext === ".mkv" ? "video/x-matroska" : "video/mp4";
+    res.setHeader("Content-Type", mime);
+    res.setHeader("Content-Disposition", 'attachment; filename="' + safeName(info.title) + ext + '"');
     res.setHeader("Cache-Control", "no-store");
-
-    const child = spawn("yt-dlp", [
-      "--no-warnings", "--no-playlist", "--no-progress",
-      "-f", "best[ext=mp4]/best",
-      "-o", "-", url
-    ], { stdio: ["ignore", "pipe", "pipe"] });
-    let stderr = "";
-    child.stderr.on("data", chunk => { stderr = (stderr + chunk.toString()).slice(-4000); });
-    child.on("error", () => { if (!res.headersSent) res.status(502); res.end(); });
-    child.stdout.pipe(res);
-    child.on("close", code => {
-      if (code !== 0) {
-        if (!res.headersSent) res.status(502).json({ error: "The media download failed. The post may be restricted or unavailable." });
-        else res.destroy(new Error("Media stream failed"));
-      }
-    });
-    res.on("close", () => { if (!res.writableEnded) child.kill("SIGTERM"); });
+    res.on("close", () => fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {}));
+    await pipeline(fs.createReadStream(file), res);
   } catch (err) {
-    res.status(400).json({ error: err.message || "Unable to download this media." });
+    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+    if (!res.headersSent) res.status(400).json({ error: err.message || "Unable to download this media." });
+    else res.destroy(err);
+  }
+});
+
+app.post("/api/batch-download", async (req, res) => {
+  let urls;
+  try {
+    if (!Array.isArray(req.body?.urls) || req.body.urls.length === 0) throw new Error("Paste one or more Instagram links first.");
+    if (req.body.urls.length > 10) throw new Error("Batch mode supports up to 10 links per ZIP. Split larger lists into smaller batches.");
+    urls = [...new Set(req.body.urls.map(normalizeInstagramUrl))];
+    if (!urls.length) throw new Error("No valid Instagram links were provided.");
+  } catch (err) {
+    return res.status(400).json({ error: err.message || "Please check your links." });
+  }
+
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "reelsave-batch-"));
+  try {
+    const files = [];
+    for (let i = 0; i < urls.length; i++) {
+      const info = await getInfo(urls[i]);
+      const file = await downloadToDirectory(urls[i], dir, String(i + 1).padStart(2, "0") + "-" + safeName(info.title, "reel"));
+      files.push({ file, name: path.basename(file) });
+    }
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", 'attachment; filename="instagram-reels.zip"');
+    res.setHeader("Cache-Control", "no-store");
+    const archive = archiver("zip", { zlib: { level: 5 } });
+    archive.on("warning", err => { if (err.code !== "ENOENT") res.destroy(err); });
+    archive.on("error", err => res.destroy(err));
+    res.on("close", () => fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {}));
+    archive.pipe(res);
+    for (const file of files) archive.file(file.file, { name: file.name });
+    await archive.finalize();
+  } catch (err) {
+    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {});
+    if (!res.headersSent) res.status(400).json({ error: err.message || "Batch download failed. One or more links may be unavailable." });
+    else res.destroy(err);
   }
 });
 
 app.get("*", (_req, res) => res.sendFile(path.join(PUBLIC_DIR, "index.html")));
-
 app.listen(PORT, "0.0.0.0", () => console.log("Instagram downloader listening on port " + PORT));
