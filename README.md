@@ -5,8 +5,8 @@ A responsive Node.js/Express app that attempts to retrieve **publicly accessible
 ## Features
 
 - Single-link mode with media preview and download.
-- Separate batch mode for up to 10 links.
-- Batch mode checks links individually, supports per-item downloads, and can package available videos into one ZIP.
+- Separate bulk mode for up to 10 links.
+- bulk mode checks links individually, supports per-item downloads, and can package available videos into one ZIP.
 - Downloads select the best available video and audio formats yt-dlp can access, merging to MP4 where possible.
 
 ## Deploy on Render
